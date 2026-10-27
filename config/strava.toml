@@ -1,0 +1,9 @@
+client_id = 289844
+redirect_uri = "http://localhost"
+authorize_url = "https://www.strava.com/oauth/authorize"
+token_url = "https://www.strava.com/oauth/token"
+api_base = "https://www.strava.com/api/v3"
+
+# Maximum read access. read_all does not include private activities or the full profile.
+scopes = ["read", "read_all", "profile:read_all", "activity:read_all"]
+required_scopes = ["read_all", "profile:read_all", "activity:read_all"]
