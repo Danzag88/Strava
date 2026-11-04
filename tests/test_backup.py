@@ -4,18 +4,41 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo
 
+from strava_backup.activities_job import in_weekly_window
 from strava_backup.auth import build_authorize_url, extract_code, scopes_from_redirect
 from strava_backup.config import as_bool, upsert_env_values
 from strava_backup.endpoints import QUEUED_ENDPOINTS, RAW_TABLES
 from strava_backup.rate_limit import parse_rate_limit
 from strava_backup.schedule import activity_list_params, sweep_due
 from strava_backup.scopes import ScopeError, assert_required_scopes, parse_scopes
+from strava_backup.snowflake_io import is_programmatic_access_token
 from strava_backup.sql_text import sql_statements
 from strava_backup.transforms import effort_rows, gear_ids, parse_start_date, summary_hash
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class ScheduleTests(unittest.TestCase):
+    def test_sunday_at_17_utc_is_the_weekly_window(self):
+        self.assertTrue(in_weekly_window(datetime(2026, 11, 1, 17, 0, tzinfo=timezone.utc)))
+        self.assertFalse(in_weekly_window(datetime(2026, 11, 1, 16, 59, tzinfo=timezone.utc)))
+        self.assertFalse(in_weekly_window(datetime(2026, 11, 2, 17, 0, tzinfo=timezone.utc)))
+
+    def test_british_summer_time_still_uses_17_utc(self):
+        london = datetime(2026, 7, 5, 18, 0, tzinfo=ZoneInfo("Europe/London"))
+        self.assertTrue(in_weekly_window(london))
+
+
+class AuthModeTests(unittest.TestCase):
+    def test_jwt_value_is_a_programmatic_access_token(self):
+        token = "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJTRjozMDAyIn0.c2ln"
+        self.assertTrue(is_programmatic_access_token(token))
+
+    def test_private_key_material_is_not_a_pat(self):
+        self.assertFalse(is_programmatic_access_token("LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0t"))
 
 
 class ScopeTests(unittest.TestCase):
@@ -39,6 +62,10 @@ class ScopeTests(unittest.TestCase):
 
     def test_spaces_and_lists(self):
         self.assertEqual(parse_scopes("read, read_all"), {"read", "read_all"})
+        self.assertEqual(
+            parse_scopes("activity:read_all profile:read_all read read_all"),
+            {"activity:read_all", "profile:read_all", "read", "read_all"},
+        )
         self.assertEqual(parse_scopes(["read_all", "profile:read_all"]), {"read_all", "profile:read_all"})
 
 
@@ -148,6 +175,22 @@ class SqlTests(unittest.TestCase):
     def test_queue_tables_exist(self):
         for endpoint in QUEUED_ENDPOINTS.values():
             self.assertIn(endpoint.table, RAW_TABLES)
+
+    def test_activities_endpoint_table(self):
+        script = (ROOT / "sql" / "003_activities.sql").read_text()
+        statements = sql_statements(script)
+        create = next(statement for statement in statements if statement.upper().startswith("CREATE TABLE"))
+        for column in (
+            "ACTIVITY_ID",
+            "NAME",
+            "DISTANCE",
+            "SPORT_TYPE",
+            "START_LATITUDE",
+            "MAP_SUMMARY_POLYLINE",
+            "SUFFER_SCORE",
+        ):
+            self.assertIn(column, create)
+        self.assertTrue(any(statement.upper().startswith("MERGE") for statement in statements))
 
     def test_ops_tables(self):
         script = (ROOT / "sql" / "001_ops.sql").read_text()

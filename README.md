@@ -1,6 +1,6 @@
-# Strava daily backup
+# Strava weekly activity backup
 
-The backup runs by itself at 06:00 UTC from GitHub Actions. Strava consent happens once. Each run exchanges the refresh token for a new access token and writes that refresh token back to Snowflake.
+Strava consent happens once. Each run calls `https://www.strava.com/oauth/token` with the saved refresh token, then merges activities into `STRAVA_DB.ACTIVITIES.STRAVA_ACTIVITIES`. The Mac crontab runs that job on Sunday at 17:00 UTC. GitHub Actions uses the same time after this workflow is on `main` and the Actions secrets are set.
 
 ## One-time setup
 
@@ -15,7 +15,7 @@ grep -v "PUBLIC KEY" snowflake_key.pub | tr -d '\n'
 base64 < snowflake_key.p8 | tr -d '\n'
 ```
 
-Put the public-key line in `RSA_PUBLIC_KEY`. Put the base64 private key in `.env` as `SNOWFLAKE_PRIVATE_KEY_B64`, and set `SNOWFLAKE_ACCOUNT` to the account identifier without `.snowflakecomputing.com`.
+Put the public-key line in `RSA_PUBLIC_KEY`. Put either that base64 private key, or a Snowflake programmatic access token, in `.env` as `SNOWFLAKE_PRIVATE_KEY_B64`. Set `SNOWFLAKE_ACCOUNT` to the organization-account identifier (`ORGNAME-ACCOUNT`) without `.snowflakecomputing.com`. A bare locator returns a 404. A value that looks like a JWT is used as a PAT, and `SNOWFLAKE_USER` must be the user that token was issued to.
 
 4. Install with Python 3.11 or newer and approve access. Leave every scope checked. The required grant is `read,read_all,profile:read_all,activity:read_all`. macOS `python3` is often 3.9, which is too old; use a 3.11+ interpreter.
 
@@ -28,8 +28,8 @@ python -m strava_backup.bootstrap
 
 The command prints an authorize URL. After you approve, the browser cannot open `localhost`. Copy the full address bar and paste it into the prompt. The command writes the refresh token to `.env` and, when Snowflake is configured, to `OPS.OAUTH_TOKEN`. It refuses to save a token that is missing `read_all`, `profile:read_all`, or `activity:read_all`.
 
-5. Push this repo to `main`. In GitHub, add these Actions secrets: `STRAVA_CLIENT_SECRET`, `STRAVA_REFRESH_TOKEN`, `STRAVA_GRANTED_SCOPE`, `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_ROLE`, `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_DATABASE`, `SNOWFLAKE_PRIVATE_KEY_B64`. The schedule runs only after the workflow file is on `main`.
+5. Push this repo to `main`. In GitHub, add these Actions secrets: `STRAVA_CLIENT_SECRET`, `STRAVA_REFRESH_TOKEN`, `STRAVA_GRANTED_SCOPE`, `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_ROLE`, `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_DATABASE`, `SNOWFLAKE_PRIVATE_KEY_B64`. The weekly schedule runs only after the workflow file is on `main`.
 
-The first runs fill history until the daily read cap, then continue the next morning. Segment efforts are copied from each activity detail response into `SEGMENT_EFFORTS`. `SEGMENT_EFFORT` and `SEGMENT_EFFORT_STREAMS` are created for those API calls and stay empty, because fetching every effort would use up the daily read cap. A manual run is available from the Actions tab. Use the `reseed_token` input only after a new bootstrap, when the GitHub refresh-token secret should replace the Snowflake copy.
+The scheduled job lists activities and merges each response into `STRAVA_DB.ACTIVITIES.STRAVA_ACTIVITIES`. A manual run is available from the Actions tab. Use the `reseed_token` input only after a new bootstrap, when the GitHub refresh-token secret should replace the stored copy.
 
 GitHub pauses scheduled workflows after 60 days without a commit. If GitHub emails that notice, re-enable the workflow. `workflow_dispatch` still works.

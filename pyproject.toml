@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "strava-backup"
 version = "0.1.0"
-description = "Daily Strava backup into Snowflake"
+description = "Weekly Strava activity backup into Snowflake"
 requires-python = ">=3.11"
 dependencies = [
   "requests>=2.32.0",

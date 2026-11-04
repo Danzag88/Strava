@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 REQUIRED_SCOPE_NAMES = ("read_all", "profile:read_all", "activity:read_all")
 
 
@@ -14,8 +16,7 @@ def parse_scopes(scope_value: object) -> set[str]:
         return set()
     if isinstance(scope_value, (list, tuple, set)):
         return {str(part).strip() for part in scope_value if str(part).strip()}
-    text = str(scope_value).replace(" ", "")
-    return {part for part in text.split(",") if part}
+    return {part for part in re.split(r"[\s,]+", str(scope_value).strip()) if part}
 
 
 def missing_scopes(scope_value: object, required: tuple[str, ...] = REQUIRED_SCOPE_NAMES) -> list[str]:

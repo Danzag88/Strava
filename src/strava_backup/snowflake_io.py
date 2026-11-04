@@ -44,6 +44,17 @@ ENTITY_KEY_COLUMNS = {
 }
 
 
+def _is_refresh(statement: str) -> bool:
+    command = statement.lstrip().upper()
+    return command.startswith("MERGE") or command.startswith("DELETE")
+
+
+def is_programmatic_access_token(value: str) -> bool:
+    """Snowflake PATs are JWTs: three dot-separated segments, header starting with eyJ."""
+    parts = value.split(".")
+    return len(parts) == 3 and parts[0].startswith("eyJ") and all(parts)
+
+
 def private_key_der(encoded: str) -> bytes:
     try:
         pem = base64.b64decode(encoded)
@@ -58,31 +69,55 @@ def private_key_der(encoded: str) -> bytes:
     return key.private_bytes(encoding=Encoding.DER, format=PrivateFormat.PKCS8, encryption_algorithm=NoEncryption())
 
 
+def open_connection(settings: Settings, *, include_context: bool = True):
+    """Connect with a PAT when SNOWFLAKE_PRIVATE_KEY_B64 holds one, otherwise key-pair auth."""
+    secret = settings.snowflake_private_key_b64.strip()
+    kwargs: dict[str, Any] = {
+        "account": settings.snowflake_account,
+        "user": settings.snowflake_user,
+        "autocommit": True,
+        "client_session_keep_alive": True,
+        "enable_server_session_keep_alive_auto_detection": False,
+    }
+    if is_programmatic_access_token(secret):
+        kwargs["authenticator"] = "PROGRAMMATIC_ACCESS_TOKEN"
+        kwargs["token"] = secret
+    else:
+        kwargs["private_key"] = private_key_der(secret)
+    if include_context:
+        kwargs.update(
+            role=settings.snowflake_role,
+            warehouse=settings.snowflake_warehouse,
+            database=settings.snowflake_database,
+            schema="OPS",
+        )
+    return snowflake.connector.connect(**kwargs)
+
+
 class SnowflakeStore:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.database = settings.snowflake_database
-        self.conn = snowflake.connector.connect(
-            account=settings.snowflake_account,
-            user=settings.snowflake_user,
-            private_key=private_key_der(settings.snowflake_private_key_b64),
-            role=settings.snowflake_role,
-            warehouse=settings.snowflake_warehouse,
-            database=self.database,
-            schema="OPS",
-            autocommit=True,
-            client_session_keep_alive=True,
-        )
+        self.conn = open_connection(settings)
 
     def close(self) -> None:
         self.conn.close()
 
     def apply_project_ddl(self) -> None:
         root = repo_root()
-        for name in ("001_ops.sql", "002_raw_tables.sql"):
+        for name in ("001_ops.sql", "002_raw_tables.sql", "003_activities.sql"):
             script = (root / "sql" / name).read_text()
             script = script.replace("STRAVA.", f"{self.database}.")
             for statement in sql_statements(script):
+                if name == "003_activities.sql" and _is_refresh(statement):
+                    continue
+                self._execute(statement)
+
+    def refresh_activities_table(self) -> None:
+        script = (repo_root() / "sql" / "003_activities.sql").read_text()
+        script = script.replace("STRAVA.", f"{self.database}.")
+        for statement in sql_statements(script):
+            if _is_refresh(statement):
                 self._execute(statement)
 
     def get_token(self) -> AccessToken | None:

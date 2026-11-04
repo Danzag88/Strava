@@ -1,4 +1,4 @@
-"""Daily Strava backup entrypoint."""
+"""Strava backup entrypoint."""
 
 from __future__ import annotations
 
@@ -239,8 +239,12 @@ def _sync_activities(client: StravaClient, store: SnowflakeStore, athlete_id: st
                 seen.append(activity_id)
             count += 1
     except StravaError as exc:
+        _refresh_activities(store)
         if exc.status == 429:
             raise DailyBudgetExhausted(str(exc)) from exc
+        raise
+    except DailyBudgetExhausted:
+        _refresh_activities(store)
         raise
     logger.info("Stored %s activity summaries", count)
     if full:
@@ -248,6 +252,14 @@ def _sync_activities(client: StravaClient, store: SnowflakeStore, athlete_id: st
         store.set_state("initial_activity_list_complete", "true")
         store.set_state("last_full_sweep_at", now.isoformat())
         logger.info("Full activity sweep marked %s missing activities deleted", deleted)
+    store.refresh_activities_table()
+
+
+def _refresh_activities(store: SnowflakeStore) -> None:
+    try:
+        store.refresh_activities_table()
+    except Exception:
+        logger.exception("Could not refresh MART.ACTIVITIES")
 
 
 def _drain_queue(client: StravaClient, store: SnowflakeStore, athlete_id: str) -> None:
