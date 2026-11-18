@@ -1,6 +1,6 @@
 # Strava weekly activity backup
 
-Strava consent happens once. Each run calls `https://www.strava.com/oauth/token` with the saved refresh token, then merges activities into `STRAVA_DB.ACTIVITIES.STRAVA_ACTIVITIES`. The Mac crontab runs that job on Sunday at 17:00 UTC. GitHub Actions uses the same time after this workflow is on `main` and the Actions secrets are set.
+Strava consent happens once. Each run calls `https://www.strava.com/oauth/token` with the saved refresh token, then merges activities into `STRAVA_DB.ACTIVITIES.STRAVA_ACTIVITIES`. Activity and athlete ids are taken from `id_str` and stored in `NUMBER(38,0)`, which holds a 64-bit integer exactly. The Mac crontab runs that job on Sunday at 17:00 UTC. GitHub Actions uses the same time after this workflow is on `main` and the Actions secrets are set.
 
 ## One-time setup
 

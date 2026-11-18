@@ -15,7 +15,14 @@ from strava_backup.schedule import activity_list_params, sweep_due
 from strava_backup.scopes import ScopeError, assert_required_scopes, parse_scopes
 from strava_backup.snowflake_io import is_programmatic_access_token
 from strava_backup.sql_text import sql_statements
-from strava_backup.transforms import effort_rows, gear_ids, parse_start_date, summary_hash
+from strava_backup.transforms import (
+    effort_rows,
+    ensure_id_strings,
+    gear_ids,
+    parse_start_date,
+    resource_id,
+    summary_hash,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -154,7 +161,18 @@ class TransformTests(unittest.TestCase):
         rows = effort_rows(activity)
         self.assertEqual(rows[0]["effort_id"], "5")
         self.assertEqual(rows[0]["segment_id"], "7")
+        self.assertEqual(rows[0]["activity_id"], "9")
         self.assertEqual(len(rows), 1)
+
+    def test_id_str_is_preferred_for_64_bit_ids(self):
+        large = 2**53 + 3
+        self.assertEqual(resource_id({"id": large, "id_str": str(large)}), str(large))
+        self.assertEqual(resource_id({"id": large}), str(large))
+        self.assertIsNone(resource_id({"id": float(large)}))
+        copied = ensure_id_strings({"id": large, "athlete": {"id": 1176895}})
+        self.assertEqual(copied["id_str"], str(large))
+        self.assertEqual(copied["athlete"]["id_str"], "1176895")
+        self.assertEqual(copied["id"], large)
 
     def test_start_date_is_utc_naive(self):
         parsed = parse_start_date("2018-05-02T12:15:09Z")
@@ -190,7 +208,9 @@ class SqlTests(unittest.TestCase):
             "SUFFER_SCORE",
         ):
             self.assertIn(column, create)
-        self.assertTrue(any(statement.upper().startswith("MERGE") for statement in statements))
+        self.assertIn("TRY_TO_NUMBER(PAYLOAD:id_str::VARCHAR, 38, 0)", script)
+        self.assertNotIn("PAYLOAD:id::NUMBER", script)
+        self.assertNotIn("PAYLOAD:athlete:id::NUMBER", script)
 
     def test_ops_tables(self):
         script = (ROOT / "sql" / "001_ops.sql").read_text()

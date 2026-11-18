@@ -16,6 +16,7 @@ from strava_backup.auth import refresh_access_token
 from strava_backup.client import StravaClient
 from strava_backup.config import load_settings, upsert_env_values
 from strava_backup.snowflake_io import open_connection
+from strava_backup.transforms import ensure_id_strings, resource_id
 
 logger = logging.getLogger(__name__)
 
@@ -51,18 +52,20 @@ def _merge_batch(cursor, batch: list[dict]) -> None:
         MERGE INTO {TARGET} AS target
         USING (
           SELECT
-            value:id::NUMBER AS ACTIVITY_ID,
+            TRY_TO_NUMBER(value:activity_id_str::VARCHAR, 38, 0) AS ACTIVITY_ID,
+            value:activity_id_str::VARCHAR AS ACTIVITY_ID_STR,
             TRY_TO_TIMESTAMP_TZ(value:start_date::VARCHAR) AS START_DATE,
-            value AS RAW
+            value:raw AS RAW
           FROM TABLE(FLATTEN(INPUT => PARSE_JSON(%s)))
         ) AS source
         ON target.ACTIVITY_ID = source.ACTIVITY_ID
         WHEN MATCHED THEN UPDATE SET
+          ACTIVITY_ID_STR = source.ACTIVITY_ID_STR,
           START_DATE = source.START_DATE,
           RAW = source.RAW,
           LOADED_AT = CURRENT_TIMESTAMP()
-        WHEN NOT MATCHED THEN INSERT (ACTIVITY_ID, START_DATE, RAW)
-          VALUES (source.ACTIVITY_ID, source.START_DATE, source.RAW)
+        WHEN NOT MATCHED THEN INSERT (ACTIVITY_ID, ACTIVITY_ID_STR, START_DATE, RAW)
+          VALUES (source.ACTIVITY_ID, source.ACTIVITY_ID_STR, source.START_DATE, source.RAW)
         """,
         (body,),
     )
@@ -90,13 +93,20 @@ def backup_activities() -> int:
 
     client = StravaClient(token.access_token, settings.api_base)
     activities: list[dict] = []
-    seen: set[int] = set()
+    seen: set[str] = set()
     for activity in client.get_pages("/athlete/activities"):
-        activity_id = activity.get("id")
+        activity_id = resource_id(activity)
         if activity_id is None or activity_id in seen:
             continue
         seen.add(activity_id)
-        activities.append(activity)
+        stored = ensure_id_strings(activity)
+        activities.append(
+            {
+                "activity_id_str": activity_id,
+                "start_date": stored.get("start_date"),
+                "raw": stored,
+            }
+        )
     logger.info(
         "Collected %s activities. Read usage %s/%s this window, %s/%s today",
         len(activities),
@@ -110,6 +120,7 @@ def backup_activities() -> int:
     try:
         cursor = connection.cursor()
         warehouse = _use_warehouse(cursor, settings.snowflake_warehouse)
+        cursor.execute(f"ALTER TABLE {TARGET} ADD COLUMN IF NOT EXISTS ACTIVITY_ID_STR VARCHAR")
         logger.info("Loading into %s with warehouse %s", TARGET, warehouse)
         batch: list[dict] = []
         batch_bytes = 2

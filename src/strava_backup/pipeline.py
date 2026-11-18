@@ -29,7 +29,14 @@ from strava_backup.rate_limit import DailyBudgetExhausted, RateLimit
 from strava_backup.scopes import ScopeError, assert_required_scopes
 from strava_backup.schedule import activity_list_params
 from strava_backup.snowflake_io import SnowflakeStore
-from strava_backup.transforms import effort_rows, gear_ids, parse_start_date, summary_hash
+from strava_backup.transforms import (
+    effort_rows,
+    ensure_id_strings,
+    gear_ids,
+    parse_start_date,
+    resource_id,
+    summary_hash,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +75,7 @@ def ensure_access_token(settings: Settings, store: SnowflakeStore) -> tuple[Acce
         else:
             probe = StravaClient(token.access_token, settings.api_base)
             athlete = probe.get_json("/athlete")
-            token.athlete_id = str(athlete["id"])
+            token.athlete_id = resource_id(athlete)
     store.upsert_token(token)
     log_token_ready(token, "refreshed")
     return token, athlete
@@ -115,13 +122,15 @@ def run_backup(settings: Settings, store: SnowflakeStore) -> None:
     )
     if athlete is None:
         athlete = client.get_json("/athlete")
-    athlete_id = str(athlete["id"])
+    athlete_id = resource_id(athlete)
+    if not athlete_id:
+        raise SystemExit("Strava athlete response did not include id_str or id")
     if token.athlete_id != athlete_id:
         token.athlete_id = athlete_id
         store.upsert_token(token)
 
     snapshot_date = datetime.now(timezone.utc).date()
-    store.merge_snapshot("ATHLETE", athlete_id, snapshot_date, athlete)
+    store.merge_snapshot("ATHLETE", athlete_id, snapshot_date, ensure_id_strings(athlete))
     _catalog_get(client, store, "ATHLETE_STATS", athlete_id, snapshot_date, f"/athletes/{athlete_id}/stats")
     _catalog_get(client, store, "ATHLETE_ZONES", athlete_id, snapshot_date, "/athlete/zones")
     _enqueue_gear(store, athlete_id, athlete)
@@ -218,10 +227,9 @@ def _sync_activities(client: StravaClient, store: SnowflakeStore, athlete_id: st
     try:
         pages = client.get_pages("/athlete/activities", params)
         for activity in pages:
-            activity_id = activity.get("id")
+            activity_id = resource_id(activity)
             if activity_id is None:
                 continue
-            activity_id = str(activity_id)
             digest = summary_hash(activity)
             previous = store.activity_hash(activity_id)
             store.merge_activity(
@@ -229,7 +237,7 @@ def _sync_activities(client: StravaClient, store: SnowflakeStore, athlete_id: st
                 athlete_id,
                 parse_start_date(activity.get("start_date")),
                 digest,
-                activity,
+                ensure_id_strings(activity),
             )
             if previous != digest:
                 for child_key in ACTIVITY_CHILD_KEYS:

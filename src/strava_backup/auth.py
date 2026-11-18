@@ -12,6 +12,7 @@ import requests
 
 from strava_backup.config import Settings
 from strava_backup.scopes import ScopeError, assert_required_scopes, format_scopes, parse_scopes
+from strava_backup.transforms import resource_id
 
 logger = logging.getLogger(__name__)
 
@@ -118,9 +119,8 @@ def exchange_authorization_code(settings: Settings, code: str) -> AccessToken:
     scope = str(payload.get("scope") or "")
     assert_required_scopes(scope, settings.required_scopes)
     athlete = payload.get("athlete") or {}
-    athlete_id = str(athlete["id"]) if athlete.get("id") else None
     return AccessToken(
-        athlete_id=athlete_id,
+        athlete_id=resource_id(athlete),
         access_token=str(payload["access_token"]),
         refresh_token=str(payload["refresh_token"]),
         expires_at=_expires_at(payload),
@@ -141,9 +141,8 @@ def refresh_access_token(settings: Settings, refresh_token: str, known_scope: st
     scope = str(payload.get("scope") or known_scope or "")
     assert_required_scopes(scope, settings.required_scopes)
     athlete = payload.get("athlete") or {}
-    athlete_id = str(athlete["id"]) if athlete.get("id") else None
     return AccessToken(
-        athlete_id=athlete_id,
+        athlete_id=resource_id(athlete),
         access_token=str(payload["access_token"]),
         refresh_token=str(payload["refresh_token"]),
         expires_at=_expires_at(payload),
